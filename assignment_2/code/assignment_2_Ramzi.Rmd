@@ -610,5 +610,5 @@ mean(data_train$lprice)
 Running the models on the holdout set gives very similar RMSE scores, which is good news. This provides another layer of affirmation that our models are well specified. The ranking of the models is to be expected. LASSO does not really bring much to the table over OLS, due to the fact that dimensionality reduction is not the issue in this situation. CART performs horribly. That is in part, due to the model being not so capable, and in another part due to me specifying a strict stopping rule. As for the random forest, it provides the best results, and it captures the main drivers of the price change in a way that makes sense. 
 
 
-Link to repo: https://github.com/RamziChariag/Prediction-with-ML
+Link to repo: https://github.com/RamziChariag/Prediction-ML
 
