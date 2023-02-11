@@ -1,0 +1,234 @@
+---
+title: "Assignment 1"
+author: "Ramzi Chariag"
+date: "2023-01-21"
+output: pdf_document
+geometry: margin=0.75in
+
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load data, include=FALSE}
+
+# Import libraries 
+library(tidyverse)
+library(arm)
+library(lmtest)
+library(estimatr)
+library(sandwich)
+library(segmented)
+library(stargazer)
+library(cowplot)
+library(huxtable)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(polyreg)
+library(flexmix)
+
+
+setwd("/Users/ramzi.chariag/Documents/CEU/PhD/ML Prediction")
+cps <- read.csv("./assignment_1/data/clean/morg-2014-emp.csv")
+
+```
+
+In this assignment, I build four models to predict log wages using a large number of socio-demographic and economic variables from the CPS database. First, I create wage per hour by dividing earnings per week by the number of hours worked per week. I use the variable grade92 as a proxy for education. I also square education, since education might have a non-linear effect on earnings, at least theoretically it does. The same principle applies to the number of hours worked, for which I also generate a squared and cubic terms. I then turn all useful categorical variables into dummies making sure I leave at least one out. On some of them I left more than one out when the number of observations in the said category is negligibly low (e.g. below 100 out of the whole CPS sample).Race for example is divided into many categories, I aggregated them into white, black, asian and other (being the omitted category). I divided marital status into three categories: married, used to be married (this includes widows, separated and divorced) and never married. Information about the various variables is available in the description of the variables available on the CPS website. I restrict my analysis to legal jobs using their codes to extract them from the initial data. I also use the specific job as a categorical variable from which I generate dummies. I also get rid of variables that do not carry any useful information for this exercise since the very beginning: id, weight and timing of the survey.    
+
+```{r models occupation choice & feature engineering, include=FALSE}
+
+#filter only legal occupations
+
+cps <- cps %>% filter(occ2012 %in% c(2100,2105,1145,2160))
+
+
+# Remove variables that we know carry no information: 
+# id, weight and timing of the survey
+
+cps <- cps[,!names(cps) %in% c("hhid","intmonth","weight")]
+
+# feature engineering
+
+# continuous variables
+cps <- cps %>% mutate(w=earnwke/uhours,
+                      lnw=log(w), age2 = age**2,
+                      edu = grade92-31, edu2 = edu**2,
+                      children2 = ownchild**2, uhours2=uhours**2,
+                      uhours3=uhours**3)
+
+# categorical variables 
+
+cps <- cps %>% mutate(female=sex==2, white = (race == 1),
+                      black = (race == 2), asian = (race == 4),
+                      married = (marital %in% c(1,2,3)),
+                      was_married = (marital %in% c(4,5,6)),
+                      unionised = (unionmme == "Yes"),
+                      non_USborn = (prcitshp == "Native, Born In US"),
+                      non_UScitizen = (prcitshp == "Foreign Born, Not a US Citizen"),
+                      naturalized = (prcitshp == "Foreign Born, US Cit By Naturalization"),
+                      native_born_abroad = (prcitshp == "Native, Born Abroad Of US Parent(s)"),
+                      lawyer = (occ2012==2100),
+                      clerk = (occ2012==2105),
+                      private_profit = (class=="Private, For Profit"),
+                      private_non_profit = (class=="	Private, Nonprofit"),
+                      federal = (class=="Government - Federal"),
+                      emp_absent = (lfsr94 == "Employed-Absent"))
+
+# interactions
+
+cps <- cps %>% mutate(work_mother=female*ownchild*(uhours!=0),
+                      over_work_mother = female*ownchild**2*(uhours!=0))
+
+
+
+
+cps_overfit <- cps %>% subset(select = -c(X,w,earnwke,class,grade92,
+                                        ethnic,marital,prcitshp,
+                                        state,ind02,occ2012,
+                                        unionmme, unioncov, lfsr94,
+                                        race, sex,
+                                        private_non_profit))
+
+
+cps <- fastDummies::dummy_cols(cps, select_columns = "stfips")
+
+
+
+cps_clean <- cps %>% subset(select = -c(X,w,stfips,earnwke,class,grade92,
+                                        ethnic,marital,prcitshp,
+                                        state,ind02,occ2012,
+                                        unionmme, unioncov, lfsr94,
+                                        race, sex,stfips_TX, stfips_SC,
+                                        private_non_profit))
+
+
+
+# Models
+model1 <- lm(lnw ~ uhours+ age+ edu+ married + black+ female,
+               data = cps_clean)
+RMSElm1 <- sqrt(mean(model1$residuals^2))
+
+model2 <- lm(lnw ~  uhours+ age+ edu+ married+
+               black+ female + non_USborn+ lawyer+ private_profit+
+               emp_absent+ ownchild+ chldpres+ edu2+ children2+
+               unionised+ white+ asian+ clerk+ naturalized+
+               native_born_abroad+ federal,
+               data = cps_clean)
+RMSElm2 <- sqrt(mean(model2$residuals^2))
+
+model3 <- lm(lnw ~ .,
+               data = cps_clean)
+RMSElm3 <- sqrt(mean(model3$residuals^2))
+
+
+model4 <- lm(lnw ~ poly(uhours,5)+ poly(age,5)+ poly(edu,5) + ownchild+ chldpres+ married+
+               black+ female + asian + was_married+ non_UScitizen+ 
+               non_USborn+ lawyer+ private_profit +
+               emp_absent+ ownchild+ chldpres+ emp_absent+
+               work_mother+over_work_mother+
+               unionised+ white+ asian+ clerk+ naturalized+
+               native_born_abroad+ federal+ + stfips-1,
+               data = cps_overfit)
+RMSElm4 <- sqrt(mean(model4$residuals^2))
+
+fitControl <- trainControl(method = "repeatedcv",   
+                           number = 5,     
+                           repeats = 5)
+
+set.seed(42)
+
+model1.cv <- train(lnw ~ uhours+ age+ edu+ married + black+ female,
+               data = cps_clean,
+               method="lm",
+               trControl = fitControl,
+               preProcess = c('scale', 'center'))
+
+model1.cv
+
+model2.cv <- train(lnw ~  uhours+ age+ edu+ married+
+               black+ female + non_USborn+ lawyer+ private_profit+
+               emp_absent+ ownchild+ chldpres+ edu2+ children2+
+               unionised+ white+ asian+ clerk+ naturalized+
+               native_born_abroad+ federal,
+               data = cps_clean,
+               method="lm",
+               trControl = fitControl,
+               preProcess = c('scale', 'center'))
+
+model2.cv
+
+
+model3.cv <- train(lnw ~ .,
+               data = cps_clean,
+               method="lm",
+               trControl = fitControl,
+               preProcess = c('scale', 'center'))
+
+model3.cv
+
+
+model4.cv <- train(lnw ~ poly(uhours,5)+ poly(age,5)+ poly(edu,5) + ownchild+ chldpres+ married+
+                black+ female + asian + was_married+ non_UScitizen+ 
+                non_USborn+ lawyer+ private_profit +
+                emp_absent+ ownchild+ chldpres+ emp_absent+
+                work_mother+over_work_mother+
+                unionised+ white+ asian+ clerk+ naturalized+
+                native_born_abroad+ federal + stfips-1 ,
+                data = cps_overfit,
+                method="lm",
+                trControl = fitControl,
+                preProcess = c('scale', 'center'))
+
+model4.cv
+
+
+#BIC
+BIC_lm<-c(BIC(model1),BIC(model2),BIC(model3),BIC(model3))
+AIC_lm<-c(AIC(model1),AIC(model2),AIC(model3),AIC(model3))
+#RMSE
+cv_models<-c(0.4685449,0.4592335, 0.4509939, 0.8802224)
+lm_models <- c(RMSElm1,RMSElm2,RMSElm3,RMSElm4)
+
+
+
+```
+Predictors in the first model are what anyone would associate naively with earnings. I used uhours (hours usually worked per week), age, education, married, black and female. In the second model, I added a couple polynomial terms and other more detailed variables. the variables added are non_USborn, lawyer, private_profit (which is a dummy for working at private forr profit firm), emp_absent (which is a dummy for being officially employed but absent/on leave from work), ownchild, chldpres (underage children present in the household), education squared, number of children squared, nionised,  white,  asian, clerk (another legal job dummy like lawyer), naturalized (dummy for being a naturalized citizen of the US), native_born_abroad, federal (dummy for working for the federal government, the omitted category here working for state government). In model 3, I add additional polynomial terms and state fixed effects. In the 4th model, I add $5^{th}$ degree polynomial terms to continuous variables. Model 4 is over-fitted. This results in a lower RMSE in the linear regression case, and a higher one in the cross-validated case, as demonstrated by the plot below. Initially complexity makes the model better at predicting, but at some point, it starts becoming less and less accurate. The different RMSEs and BIC are reported in the rable below:
+
+\begin{center}
+
+\begin{tabular}{lcccc} \hline
+Model & 1 & 2 & 3 & 4 \\ \hline
+BIC & 1697 & 1715 & 1937 & 1937 \\ \hline
+RMSE & 0.466 & 0.450 & 0.419 & 0.415 \\ \hline
+CV.RMSE & 0.469 & 0.459 & 0.451 & 0.880 \\ \hline
+
+\end{tabular}
+\end{center}
+
+BIC does not change between model 3 and 4. This is due to the fact that the increase in the number of variables between models 3 and 4 is not large enough to induce a change in BIC. However, RMSE for the cross validated models picks model 3. Theoretically, model 3 is the one that makes the most sense. Model 4 is forcibly over-fitted just to show how the cross-validated RMSE would increase if we add too many predictors to the linear model. I tried adding intercation terms with the state dummies, but the number of variables blew up and was above the number of observations in the restricted sample. In the whole sample that, such a model could be deployed to demonstrate that things could get even worse. 
+
+```{r graph, echo=FALSE, results='hide' }
+cv_models<-c(0.4685449,0.4592335, 0.4509939, 0.8802224)
+lm_models <- c(RMSElm1,RMSElm2,RMSElm3,RMSElm4)
+xValue <- 1:4
+
+df1 <- data.frame(xValue, cv_models, 
+           rep('Cross validated', times = length(cv_models)))
+df2 <- data.frame(xValue, lm_models, 
+           rep('Full sample', times = length(lm_models)))
+names(df1)<-c("complexity","RMSE","model_type")
+names(df2)<-c("complexity","RMSE","model_type")
+df <-rbind(df1,df2)
+
+p<-ggplot(df, aes(x=complexity,y=RMSE, color = model_type)) +
+  geom_line()
+
+p
+ggsave("complexity_plot.png")
+
+```
+
+
